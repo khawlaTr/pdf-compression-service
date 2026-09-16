@@ -44,6 +44,14 @@ async function authMiddleware(req, res, next) {
     next();
   } catch (e) {
     if (e instanceof errors.ValidationError) {
+      const authHeader = req.headers.authorization;
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[pdf-compression-service] 401:',
+        authHeader ? `Authorization header present (${authHeader.slice(0, 15)}...)` : 'no Authorization header at all',
+        '-',
+        e.message,
+      );
       return res.status(401).json({ error: 'unauthorized', message: 'Jeton XSUAA absent ou invalide.' });
     }
     // eslint-disable-next-line no-console
