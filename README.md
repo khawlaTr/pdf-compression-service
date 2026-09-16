@@ -12,10 +12,13 @@ une app CAP ni à un Object Store.
 - Un seul endpoint métier, `POST /compress`, qui bascule automatiquement entre
   deux modes selon la taille (`Content-Length`) :
   - **synchrone** (`<= SYNC_MAX_BYTES`, défaut 20 Mo) : la requête reste ouverte
-    le temps de la compression, réponse `200` avec le résultat directement.
+    le temps de la compression, réponse `200` dont **le corps est directement
+    le PDF compressé** (`Content-Type: application/pdf`), métadonnées en
+    en-têtes `X-*` (voir plus bas).
   - **asynchrone** (au-delà) : réponse immédiate `202 {jobId}`, à interroger via
-    `GET /jobs/:jobId` jusqu'à `status: "done"`, puis `GET /jobs/:jobId/result`
-    pour récupérer le PDF compressé.
+    `GET /jobs/:jobId` (JSON, pour le statut) jusqu'à `status: "done"`, puis
+    `GET /jobs/:jobId/result` qui renvoie le PDF compressé de la même façon
+    (corps = PDF, métadonnées en en-têtes `X-*`).
 - Chaque upload est streamé vers un fichier temporaire sur le disque éphémère
   de l'instance (jamais bufferisé entièrement en mémoire), traité par
   Ghostscript en ligne de commande, puis nettoyé après lecture du résultat ou
@@ -33,11 +36,11 @@ une app CAP ni à un Object Store.
 |---|---|---|
 | `GET` | `/health` | Healthcheck CF, sans authentification |
 | `POST` | `/compress` | Soumet un PDF, deux formats acceptés : `Content-Type: application/pdf`/`application/octet-stream` (corps = stream binaire), ou `multipart/form-data` avec un champ fichier `fileInput` + un champ texte optionnel `expectedOutputSize` (ex. `"10MB"`, `"512KB"`) — c'est le format utilisé par le script Groovy CPI. `?preset=/screen\|/ebook\|/printer` pour surcharger le preset Ghostscript par défaut ; `?async=true` pour forcer le mode asynchrone |
-| `GET` | `/jobs/:jobId` | Statut + résultat d'un job asynchrone |
-| `GET` | `/jobs/:jobId/result` | Télécharge le PDF compressé une fois `status: "done"` |
+| `GET` | `/jobs/:jobId` | Statut JSON d'un job asynchrone (pour le polling) |
+| `GET` | `/jobs/:jobId/result` | Corps = PDF compressé une fois `status: "done"`, métadonnées en en-têtes |
 | `DELETE` | `/jobs/:jobId` | Annule/nettoie un job |
 
-Réponse type (200 ou `GET /jobs/:jobId` une fois terminé) :
+Réponse JSON type de `GET /jobs/:jobId` pendant/après le polling :
 
 ```json
 {
@@ -56,6 +59,12 @@ Réponse type (200 ou `GET /jobs/:jobId` une fois terminé) :
 
 `expectedOutputSize`/`withinExpectedSize` n'apparaissent que si le champ
 `expectedOutputSize` a été fourni dans l'upload multipart.
+
+Sur une réponse **200** (`/compress` synchrone) ou **200** (`/jobs/:jobId/result`),
+les mêmes informations arrivent en en-têtes plutôt qu'en JSON, le corps étant
+le PDF lui-même : `X-Original-Size`, `X-Compressed-Size`, `X-Base64-Size`,
+`X-Ratio`, `X-Within-Limit`, `X-Low-Gain`, et si applicable
+`X-Expected-Output-Size`/`X-Within-Expected-Size`.
 
 `lowGain: true` signale un PDF déjà optimisé (texte/vecteurs, peu d'images) —
 ce n'est pas une erreur, juste un signal que le gain de compression est faible.

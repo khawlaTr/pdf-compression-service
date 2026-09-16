@@ -25,6 +25,28 @@ function toPublicJob(job) {
   };
 }
 
+// Metadata travels as headers so the body can be the actual compressed PDF —
+// callers (a CPI iFlow especially) want the file itself back, not a JSON
+// wrapper they'd have to unpack with a second call.
+function setVerdictHeaders(res, job) {
+  res.set('X-Original-Size', String(job.originalSize));
+  res.set('X-Compressed-Size', String(job.compressedSize));
+  res.set('X-Base64-Size', String(job.base64Size));
+  res.set('X-Ratio', String(job.ratio));
+  res.set('X-Within-Limit', String(job.withinLimit));
+  res.set('X-Low-Gain', String(job.lowGain));
+  if (job.expectedOutputSizeBytes !== undefined) {
+    res.set('X-Expected-Output-Size', String(job.expectedOutputSizeBytes));
+    res.set('X-Within-Expected-Size', String(job.withinExpectedSize));
+  }
+}
+
+function sendResult(res, job) {
+  setVerdictHeaders(res, job);
+  res.status(200).type('application/pdf');
+  fs.createReadStream(job.outputPath).pipe(res);
+}
+
 function uploadOptionsFromQuery(req) {
   return {
     pdfSettings: req.query.preset ? String(req.query.preset) : undefined,
@@ -58,7 +80,7 @@ function submitJob(fileStream, { pdfSettings, forceAsync, contentLength }, res, 
         });
         return;
       }
-      res.status(200).json(toPublicJob(job));
+      sendResult(res, job);
     },
   });
 }
@@ -142,8 +164,7 @@ router.get('/jobs/:jobId/result', (req, res) => {
   if (job.status !== 'done') {
     return res.status(409).json({ error: 'not_ready', status: job.status });
   }
-  res.status(200).type('application/pdf');
-  fs.createReadStream(job.outputPath).pipe(res);
+  sendResult(res, job);
 });
 
 router.delete('/jobs/:jobId', (req, res) => {

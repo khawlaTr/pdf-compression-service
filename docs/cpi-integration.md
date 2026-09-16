@@ -52,17 +52,25 @@ n'a qu'à brancher sur le code HTTP retourné :
 ```
 [Start] → [HTTP Receiver: POST /compress] → [Router]
               │
-              ├─ 200 (sync, petit fichier) ──────────────► [suite du flux, corps = résultat déjà présent]
+              ├─ 200 (sync, petit fichier) ──────────────► corps = PDF compressé directement,
+              │                                             metadonnees dans les en-tetes X-*
+              │                                             (X-Within-Limit, X-Ratio, ...)
               │
-              └─ 202 (async, gros fichier) → [extraire jobId]
+              └─ 202 (async, gros fichier) → [extraire jobId du JSON]
                                             → [Local Integration Process: boucle Poll-Enrich]
                                                  │
                                                  ├─ GET /jobs/{jobId} toutes les N secondes
-                                                 │  (Content Modifier + Router: status == "done"?)
+                                                 │  (reponse JSON — Content Modifier + Router:
+                                                 │   status == "done"?)
                                                  │
                                                  └─ une fois "done": GET /jobs/{jobId}/result
-                                                    → corps = PDF compressé
+                                                    → corps = PDF compresse, memes en-tetes X-*
 ```
+
+Dans les deux cas où le corps est le PDF (`200` direct, ou `GET .../result`),
+lisez les métadonnées dans les en-têtes de réponse plutôt que dans le corps —
+un Content Modifier peut les copier en propriétés du message pour le `Router`
+qui suit (`${header.X-Within-Limit}`, etc.).
 
 Points d'implémentation CPI à prévoir explicitement :
 
