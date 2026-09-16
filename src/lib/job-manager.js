@@ -8,7 +8,7 @@ const { pipeline } = require('stream/promises');
 const config = require('../config');
 const tmpfiles = require('./tmpfiles');
 const ghostscript = require('./ghostscript');
-const { computeVerdict } = require('./sizing');
+const { computeVerdict, parseSize } = require('./sizing');
 
 const jobs = new Map(); // jobId -> job record
 const pendingQueue = [];
@@ -56,6 +56,10 @@ function runNext() {
         minGainRatio: config.minGainRatio,
         base64LimitBytes: config.base64LimitBytes,
       });
+      if (job.expectedOutputSizeBytes !== undefined) {
+        verdict.expectedOutputSize = job.expectedOutputSizeBytes;
+        verdict.withinExpectedSize = compressedSize <= job.expectedOutputSizeBytes;
+      }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });
       scheduleTtlCleanup(jobId);
@@ -140,4 +144,14 @@ function cancelJob(jobId) {
   return true;
 }
 
-module.exports = { createJob, getJob, cancelJob };
+// Attaches a caller-supplied target size (e.g. "10MB") to a job, so the
+// eventual verdict can report whether the compressed result met it — used
+// by the multipart upload path, where this arrives as a trailing form field
+// after the file part has already started streaming to disk.
+function setExpectedOutputSize(jobId, raw) {
+  const bytes = parseSize(raw);
+  if (bytes === undefined) return;
+  touch(jobId, { expectedOutputSizeBytes: bytes });
+}
+
+module.exports = { createJob, getJob, cancelJob, setExpectedOutputSize };

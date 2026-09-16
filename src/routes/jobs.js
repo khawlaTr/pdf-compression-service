@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const express = require('express');
+const busboy = require('busboy');
 const config = require('../config');
 const jobManager = require('../lib/job-manager');
 
@@ -17,48 +18,116 @@ function toPublicJob(job) {
     ratio: job.ratio,
     withinLimit: job.withinLimit,
     lowGain: job.lowGain,
+    expectedOutputSize: job.expectedOutputSizeBytes,
+    withinExpectedSize: job.withinExpectedSize,
     errorCode: job.errorCode,
     message: job.message,
   };
 }
 
-// Single entry point: small uploads (Content-Length <= SYNC_MAX_BYTES) are
-// compressed inline and answered with 200; larger ones are queued and
-// answered with 202 + jobId immediately, for the caller (a CPI iFlow) to
-// poll GET /jobs/:jobId. Force the async path with ?async=true regardless
-// of size, e.g. for testing.
-router.post('/compress', (req, res) => {
-  const contentType = req.headers['content-type'] || '';
-  if (!/pdf|octet-stream/i.test(contentType)) {
-    return res.status(415).json({
-      error: 'unsupported_media_type',
-      message: 'Content-Type doit être application/pdf ou application/octet-stream.',
-    });
-  }
+function uploadOptionsFromQuery(req) {
+  return {
+    pdfSettings: req.query.preset ? String(req.query.preset) : undefined,
+    forceAsync: req.query.async === 'true',
+  };
+}
 
-  const contentLength = Number(req.headers['content-length'] || 0);
-  const pdfSettings = req.query.preset ? String(req.query.preset) : undefined;
-  const forceAsync = req.query.async === 'true';
+// Creates the job and returns its id. `onResponded` fires once a response
+// has actually been sent to the client — immediately for the async (202)
+// path, or later from within the onDone callback for the sync path — so
+// multipart's "did I already answer this request" bookkeeping stays correct
+// either way.
+function submitJob(fileStream, { pdfSettings, forceAsync, contentLength }, res, onResponded) {
   const isSync = !forceAsync && contentLength > 0 && contentLength <= config.syncMaxBytes;
 
   if (!isSync) {
-    const jobId = jobManager.createJob(req, { pdfSettings });
+    const jobId = jobManager.createJob(fileStream, { pdfSettings });
     res.status(202).location(`/jobs/${jobId}`).json({ jobId, statusUrl: `/jobs/${jobId}` });
-    return;
+    onResponded();
+    return jobId;
   }
 
-  jobManager.createJob(req, {
+  return jobManager.createJob(fileStream, {
     pdfSettings,
     onDone: (err, job) => {
+      onResponded();
       if (err || !job) {
-        return res.status(422).json({
+        res.status(422).json({
           error: (job && job.errorCode) || 'compression_failed',
           message: err ? err.message : 'Échec de la compression.',
         });
+        return;
       }
       res.status(200).json(toPublicJob(job));
     },
   });
+}
+
+// multipart/form-data upload (e.g. a CPI Groovy script building a form body):
+// expects a file part named `fileInput` and accepts an optional text field
+// `expectedOutputSize` (human-readable, e.g. "10MB") echoed back in the
+// verdict as `withinExpectedSize`. The file part is piped straight into the
+// job pipeline as it streams in — never buffered whole in memory.
+function handleMultipart(req, res, contentType) {
+  const bb = busboy({ headers: { 'content-type': contentType } });
+  const { pdfSettings, forceAsync } = uploadOptionsFromQuery(req);
+  const contentLength = Number(req.headers['content-length'] || 0);
+  let jobId;
+  let fileSeen = false;
+  let responded = false;
+
+  bb.on('file', (name, stream, info) => {
+    if (name !== 'fileInput') {
+      stream.resume(); // discard any other file part
+      return;
+    }
+    fileSeen = true;
+    jobId = submitJob(stream, { pdfSettings, forceAsync, contentLength }, res, () => {
+      responded = true;
+    });
+  });
+
+  bb.on('field', (name, value) => {
+    if (name === 'expectedOutputSize' && jobId) {
+      jobManager.setExpectedOutputSize(jobId, value);
+    }
+  });
+
+  bb.on('error', (err) => {
+    if (!responded) {
+      responded = true;
+      res.status(400).json({ error: 'bad_multipart', message: err.message });
+    }
+  });
+
+  bb.on('close', () => {
+    if (!fileSeen && !responded) {
+      responded = true;
+      res.status(400).json({ error: 'missing_file', message: 'Partie "fileInput" absente du multipart.' });
+    }
+  });
+
+  req.pipe(bb);
+}
+
+router.post('/compress', (req, res) => {
+  const contentType = req.headers['content-type'] || '';
+
+  if (/^multipart\/form-data/i.test(contentType)) {
+    return handleMultipart(req, res, contentType);
+  }
+
+  if (!/pdf|octet-stream/i.test(contentType)) {
+    return res.status(415).json({
+      error: 'unsupported_media_type',
+      message:
+        'Content-Type doit être application/pdf, application/octet-stream, ou multipart/form-data avec un champ "fileInput".',
+    });
+  }
+
+  const contentLength = Number(req.headers['content-length'] || 0);
+  const { pdfSettings, forceAsync } = uploadOptionsFromQuery(req);
+  submitJob(req, { pdfSettings, forceAsync, contentLength }, res, () => {});
 });
 
 router.get('/jobs/:jobId', (req, res) => {
