@@ -37,7 +37,12 @@ publique classique, protégée uniquement par la validation du jeton (voir
   - Adresse : `https://pdf-compression-service.<landscape>.cfapps.<region>.hana.ondemand.com/compress`
   - Authentication : `OAuth2ClientCredentials`, credential créée ci-dessus.
   - Method : `POST`.
-  - Content-Type : `application/pdf` (ou `application/octet-stream`).
+  - Content-Type : `application/pdf`/`application/octet-stream` si le corps
+    du message est déjà le PDF brut, ou `multipart/form-data` si l'iFlow
+    construit la requête elle-même (ex. script Groovy) avec un champ fichier
+    nommé `fileInput` et, en option, un champ texte `expectedOutputSize`
+    (ex. `"10MB"`) — les deux formats sont supportés par `/compress`, aucune
+    configuration côté service à changer selon le format choisi.
 
 ## 3. Pattern d'appel dans l'iFlow
 

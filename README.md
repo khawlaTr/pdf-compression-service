@@ -32,7 +32,7 @@ une app CAP ni à un Object Store.
 | Méthode | Route | Description |
 |---|---|---|
 | `GET` | `/health` | Healthcheck CF, sans authentification |
-| `POST` | `/compress` | Soumet un PDF (corps = stream binaire). `?preset=/screen\|/ebook\|/printer` pour surcharger le preset Ghostscript par défaut ; `?async=true` pour forcer le mode asynchrone |
+| `POST` | `/compress` | Soumet un PDF, deux formats acceptés : `Content-Type: application/pdf`/`application/octet-stream` (corps = stream binaire), ou `multipart/form-data` avec un champ fichier `fileInput` + un champ texte optionnel `expectedOutputSize` (ex. `"10MB"`, `"512KB"`) — c'est le format utilisé par le script Groovy CPI. `?preset=/screen\|/ebook\|/printer` pour surcharger le preset Ghostscript par défaut ; `?async=true` pour forcer le mode asynchrone |
 | `GET` | `/jobs/:jobId` | Statut + résultat d'un job asynchrone |
 | `GET` | `/jobs/:jobId/result` | Télécharge le PDF compressé une fois `status: "done"` |
 | `DELETE` | `/jobs/:jobId` | Annule/nettoie un job |
@@ -48,9 +48,14 @@ Réponse type (200 ou `GET /jobs/:jobId` une fois terminé) :
   "base64Size": 15379115,
   "ratio": 0.9843,
   "withinLimit": true,
-  "lowGain": false
+  "lowGain": false,
+  "expectedOutputSize": 10485760,
+  "withinExpectedSize": true
 }
 ```
+
+`expectedOutputSize`/`withinExpectedSize` n'apparaissent que si le champ
+`expectedOutputSize` a été fourni dans l'upload multipart.
 
 `lowGain: true` signale un PDF déjà optimisé (texte/vecteurs, peu d'images) —
 ce n'est pas une erreur, juste un signal que le gain de compression est faible.
