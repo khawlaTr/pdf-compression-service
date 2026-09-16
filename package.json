@@ -1,0 +1,19 @@
+{
+  "name": "pdf-compression-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Service HTTP de compression de PDF volumineux via Ghostscript, appelé par SAP CPI (Integration Suite) dans un flux EDI.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@sap/xsenv": "^5.4.0",
+    "@sap/xssec": "^4.2.4",
+    "express": "^4.19.2",
+    "passport": "^0.7.0"
+  }
+}

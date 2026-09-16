@@ -1,0 +1,14 @@
+{
+  "xsappname": "pdf-compression-service",
+  "tenant-mode": "dedicated",
+  "description": "XSUAA instance securing the PDF compression service for machine-to-machine calls (SAP CPI OAuth2ClientCredentials).",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.Compress",
+      "description": "Allowed to submit PDF compression jobs and read their results"
+    }
+  ],
+  "oauth2-configuration": {
+    "credential-types": ["binding-secret"]
+  }
+}

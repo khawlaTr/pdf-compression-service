@@ -1,0 +1,22 @@
+---
+applications:
+  - name: pdf-compression-service
+    docker:
+      image: ghcr.io/khawlatr/pdf-compression-service:latest
+    memory: 1536M
+    disk_quota: 4096M
+    instances: 1
+    health-check-type: http
+    health-check-http-endpoint: /health
+    timeout: 180
+    services:
+      - pdf-compression-xsuaa
+    env:
+      GS_PDFSETTINGS: /ebook
+      GS_TIMEOUT_SEC: 180
+      MAX_CONCURRENT_JOBS: 2
+      SYNC_MAX_BYTES: 20971520
+      BASE64_LIMIT_BYTES: 104857600
+      MIN_GAIN_RATIO: 0.05
+      RESULT_TTL_SEC: 1800
+      TMP_DIR: /tmp/gs-jobs
