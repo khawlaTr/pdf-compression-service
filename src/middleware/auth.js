@@ -6,47 +6,44 @@
 // development and the CLI test script only — never set that in a deployed
 // environment.
 //
-// NOTE: verify the exact @sap/xssec API against the version actually
-// installed (`npm ls @sap/xssec`) before relying on this in production —
-// the SecurityContext method names have shifted across major versions and
-// this couldn't be exercised against a live XSUAA instance in this sandbox.
+// API verified against @sap/xssec 4.15.0's own README (createSecurityContext
+// / XsuaaService / SECURITY_CONTEXT) after an earlier version of this file,
+// written against the older passport-strategy-based API, failed in
+// production with "xssec.JWTStrategy is not a constructor".
 
+const { createSecurityContext, XsuaaService, SECURITY_CONTEXT, errors } = require('@sap/xssec');
+const xsenv = require('@sap/xsenv');
 const config = require('../config');
 
-let xssec;
-let xsenv;
-let passport;
+let authService;
 
-function lazyLoad() {
-  if (xssec) return;
-  xssec = require('@sap/xssec');
-  xsenv = require('@sap/xsenv');
-  passport = require('passport');
-
-  const services = xsenv.getServices({ uaa: { tag: 'xsuaa' } });
-  passport.use('JWT', new xssec.JWTStrategy(services.uaa));
-  passport.initialize();
+function getAuthService() {
+  if (!authService) {
+    const services = xsenv.getServices({ uaa: { tag: 'xsuaa' } });
+    authService = new XsuaaService(services.uaa);
+  }
+  return authService;
 }
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   if (config.authDisabled) return next();
 
-  lazyLoad();
-
-  passport.authenticate('JWT', { session: false }, (err, authInfo) => {
-    if (err || !authInfo) {
-      return res.status(401).json({ error: 'unauthorized', message: 'Jeton XSUAA absent ou invalide.' });
-    }
-    const hasScope =
-      typeof authInfo.checkLocalScope === 'function'
-        ? authInfo.checkLocalScope(config.requiredScope)
-        : authInfo.hasLocalScope(config.requiredScope);
-    if (!hasScope) {
+  try {
+    const secContext = await createSecurityContext(getAuthService(), { req });
+    if (!secContext.checkLocalScope(config.requiredScope)) {
       return res.status(403).json({ error: 'forbidden', message: `Scope "${config.requiredScope}" requis.` });
     }
-    req.authInfo = authInfo;
+    req[SECURITY_CONTEXT] = secContext;
+    req.authInfo = secContext;
     next();
-  })(req, res, next);
+  } catch (e) {
+    if (e instanceof errors.ValidationError) {
+      return res.status(401).json({ error: 'unauthorized', message: 'Jeton XSUAA absent ou invalide.' });
+    }
+    // eslint-disable-next-line no-console
+    console.error('[pdf-compression-service] auth error:', e);
+    res.status(500).json({ error: 'internal_error', message: "Erreur interne d'authentification." });
+  }
 }
 
 module.exports = authMiddleware;
