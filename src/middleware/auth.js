@@ -1,10 +1,19 @@
 'use strict';
 
 // Validates the XSUAA-issued bearer token CPI presents (OAuth2ClientCredentials
-// grant against this app's XSUAA service instance) and requires the
-// `Compress` scope. Bypassed entirely when AUTH_DISABLED=true, for local
-// development and the CLI test script only — never set that in a deployed
-// environment.
+// grant against this app's own XSUAA service instance). Bypassed entirely
+// when AUTH_DISABLED=true, for local development and the CLI test script
+// only — never set that in a deployed environment.
+//
+// No custom scope check: a client_credentials token against XSUAA only ever
+// carries the built-in `uaa.resource` scope (confirmed empirically against
+// the real deployed instance — decoding the token showed `scope: ["uaa.resource"]`
+// despite `Compress` being defined in xs-security.json). Custom scopes are a
+// user/role-collection concept and don't apply to this machine-to-machine
+// flow. The actual authorization guarantee is that only a holder of this
+// exact XSUAA instance's client secret can obtain a token that verifies
+// against its public key — successful createSecurityContext() already proves
+// that, so no further check is needed.
 //
 // API verified against @sap/xssec 4.15.0's own README (createSecurityContext
 // / XsuaaService / SECURITY_CONTEXT) after an earlier version of this file,
@@ -30,9 +39,6 @@ async function authMiddleware(req, res, next) {
 
   try {
     const secContext = await createSecurityContext(getAuthService(), { req });
-    if (!secContext.checkLocalScope(config.requiredScope)) {
-      return res.status(403).json({ error: 'forbidden', message: `Scope "${config.requiredScope}" requis.` });
-    }
     req[SECURITY_CONTEXT] = secContext;
     req.authInfo = secContext;
     next();

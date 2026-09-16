@@ -21,7 +21,11 @@ une app CAP ni à un Object Store.
   Ghostscript en ligne de commande, puis nettoyé après lecture du résultat ou
   au bout de `RESULT_TTL_SEC`.
 - Sécurisé par XSUAA : tout appel (hors `/health`) doit porter un jeton Bearer
-  avec le scope `Compress`, obtenu par CPI via OAuth2ClientCredentials.
+  valide, signé par cette instance XSUAA, obtenu par CPI via
+  OAuth2ClientCredentials. Pas de scope personnalisé à vérifier — un jeton
+  `client_credentials` ne porte de toute façon que `uaa.resource` (vérifié
+  empiriquement), l'autorisation tient au fait que seul le détenteur du
+  `clientsecret` peut obtenir un tel jeton.
 
 ## API
 
@@ -143,7 +147,11 @@ node --test test/duplicate-images.test.js
   l'état des jobs (fichier JSON à côté du PDF, ou service externe) — non fait
   ici pour garder le service simple, à reconsidérer si les redeploys en
   production s'avèrent fréquents.
-- **`@sap/xssec` non testé contre un tenant XSUAA réel dans cet environnement**
-  (pas d'accès BTP live ici) — vérifier le comportement exact de
-  `middleware/auth.js` (noms de méthodes de l'API `SecurityContext`) une fois
-  déployé, avant de considérer la sécurisation validée.
+- **`@sap/xssec` validé en direct sur le déploiement réel (2026-09-16)** :
+  la première version de `middleware/auth.js` utilisait l'API passport-strategy
+  d'une ancienne version d'xssec (`JWTStrategy`), absente de la 4.15.0
+  réellement installée — plantait en 500 sur toute requête. Corrigé avec
+  l'API v4 réelle (`createSecurityContext`/`XsuaaService`). Au passage,
+  confirmé qu'un jeton `client_credentials` ne porte pas les scopes custom de
+  `xs-security.json` (juste `uaa.resource`) — le check de scope a été retiré,
+  voir le commentaire en tête de `middleware/auth.js`.

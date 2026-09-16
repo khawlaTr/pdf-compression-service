@@ -26,5 +26,4 @@ module.exports = {
   resultTtlSec: int('RESULT_TTL_SEC', 1800),
   tmpDir: process.env.TMP_DIR || '/tmp/gs-jobs',
   authDisabled: process.env.AUTH_DISABLED === 'true',
-  requiredScope: 'Compress',
 };

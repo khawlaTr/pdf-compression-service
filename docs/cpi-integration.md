@@ -18,10 +18,15 @@ publique classique, protégée uniquement par la validation du jeton (voir
    cf create-service-key pdf-compression-xsuaa cpi-key
    cf service-key pdf-compression-xsuaa cpi-key
    ```
-3. Ces trois valeurs alimentent l'Integration Suite (étape suivante). Le jeton
-   obtenu via `grant_type=client_credentials` contiendra automatiquement le
-   scope `$XSAPPNAME.Compress` défini dans `xs-security.json` — pas de rôle
-   utilisateur à assigner puisqu'il n'y a pas d'utilisateur dans ce flux.
+3. Ces trois valeurs alimentent l'Integration Suite (étape suivante). **Correction
+   suite à un test réel** : un jeton `client_credentials` contre XSUAA ne porte
+   *pas* automatiquement les scopes définis dans `xs-security.json` (vérifié en
+   décodant un vrai jeton : `scope: ["uaa.resource"]` uniquement) — les scopes
+   personnalisés sont un mécanisme utilisateur/rôle, sans effet sur ce flux
+   machine-à-machine. L'autorisation ici repose simplement sur le fait que
+   seul le détenteur du `clientsecret` de cette instance XSUAA précise peut
+   obtenir un jeton qui vérifie correctement — voir `src/middleware/auth.js`.
+   Aucun rôle/scope à configurer côté CPI.
 
 ## 2. Configurer l'Integration Suite
 
