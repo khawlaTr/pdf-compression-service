@@ -4,7 +4,7 @@ applications:
     docker:
       image: ghcr.io/khawlatr/pdf-compression-service:latest
     memory: 1536M
-    disk_quota: 4096M
+    disk_quota: 3072M
     instances: 1
     health-check-type: http
     health-check-http-endpoint: /health
