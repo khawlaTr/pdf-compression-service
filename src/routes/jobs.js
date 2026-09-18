@@ -56,18 +56,38 @@ function uploadOptionsFromQuery(req) {
 }
 
 // Creates the job and returns its id. `onResponded` fires once a response
-// has actually been sent to the client — immediately for the async (202)
-// path, or later from within the onDone callback for the sync path — so
+// has actually been sent to the client — from the onUploaded callback for
+// the async (202) path, or later from onDone for the sync path — so
 // multipart's "did I already answer this request" bookkeeping stays correct
 // either way.
+//
+// Critically, the 202 is sent only once the upload itself has fully
+// completed (onUploaded), never earlier: an HTTP/1.1 reverse proxy (Cloud
+// Foundry's Gorouter included) treats a request as finished the moment the
+// backend sends its response, and stops forwarding the rest of the request
+// body — replying early silently truncates the upload wherever it happened
+// to be. Confirmed by reproducing the exact same stall (upload stopping
+// partway, at a different byte count each time) with a direct test bypassing
+// CPI entirely, once this endpoint replied with 202 before the body was
+// fully read.
 function submitJob(fileStream, { pdfSettings, forceAsync, contentLength }, res, onResponded) {
   const isSync = !forceAsync && contentLength > 0 && contentLength <= config.syncMaxBytes;
 
   if (!isSync) {
-    const jobId = jobManager.createJob(fileStream, { pdfSettings });
-    res.status(202).location(`/jobs/${jobId}`).json({ jobId, statusUrl: `/jobs/${jobId}` });
-    onResponded();
-    return jobId;
+    return jobManager.createJob(fileStream, {
+      pdfSettings,
+      onUploaded: (err, job) => {
+        onResponded();
+        if (err) {
+          res.status(422).json({
+            error: (job && job.errorCode) || 'upload_failed',
+            message: err.message,
+          });
+          return;
+        }
+        res.status(202).location(`/jobs/${job.jobId}`).json({ jobId: job.jobId, statusUrl: `/jobs/${job.jobId}` });
+      },
+    });
   }
 
   return jobManager.createJob(fileStream, {
