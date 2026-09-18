@@ -13,7 +13,7 @@ applications:
       - pdf-compression-xsuaa
     env:
       GS_PDFSETTINGS: /ebook
-      GS_TIMEOUT_SEC: 180
+      GS_TIMEOUT_SEC: 900
       MAX_CONCURRENT_JOBS: 2
       SYNC_MAX_BYTES: 20971520
       BASE64_LIMIT_BYTES: 104857600
