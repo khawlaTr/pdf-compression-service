@@ -24,6 +24,7 @@ module.exports = {
   base64LimitBytes: int('BASE64_LIMIT_BYTES', 100 * 1024 * 1024),
   minGainRatio: float('MIN_GAIN_RATIO', 0.05),
   resultTtlSec: int('RESULT_TTL_SEC', 1800),
+  uploadTimeoutSec: int('UPLOAD_TIMEOUT_SEC', 600),
   tmpDir: process.env.TMP_DIR || '/tmp/gs-jobs',
   authDisabled: process.env.AUTH_DISABLED === 'true',
 };

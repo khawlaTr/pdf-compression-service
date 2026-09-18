@@ -12,6 +12,7 @@ function toPublicJob(job) {
   return {
     jobId: job.jobId,
     status: job.status,
+    bytesReceived: job.bytesReceived,
     originalSize: job.originalSize,
     compressedSize: job.compressedSize,
     base64Size: job.base64Size,

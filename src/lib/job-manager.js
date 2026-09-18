@@ -110,12 +110,29 @@ function createJob(inputStream, { pdfSettings, onDone } = {}) {
 
   const writeStream = fs.createWriteStream(inputPath);
   let bytesWritten = 0;
+  let lastReported = 0;
   inputStream.on('data', (chunk) => {
     bytesWritten += chunk.length;
+    // Throttled progress reporting (every ~5MB) so GET /jobs/:id can show
+    // whether an "uploading" job is actually still receiving data, or
+    // genuinely stalled — a real diagnostic need, not routine telemetry.
+    if (bytesWritten - lastReported > 5 * 1024 * 1024) {
+      lastReported = bytesWritten;
+      touch(jobId, { bytesReceived: bytesWritten });
+    }
   });
+
+  // Without this, a stalled/abandoned upload (client hung, connection
+  // stuck) leaves the job stuck in "uploading" forever — no TTL applies
+  // until a terminal status is reached, so nothing ever cleans it up.
+  const uploadTimer = setTimeout(() => {
+    inputStream.destroy(new Error(`Upload interrompu: aucune donnée reçue depuis ${config.uploadTimeoutSec}s`));
+  }, config.uploadTimeoutSec * 1000);
+  uploadTimer.unref();
 
   pipeline(inputStream, writeStream)
     .then(() => {
+      clearTimeout(uploadTimer);
       if (bytesWritten === 0) {
         touch(jobId, { status: 'failed', errorCode: 'empty_input', message: 'Fichier vide reçu.' });
         tmpfiles.cleanupJobDir(jobId);
@@ -127,7 +144,8 @@ function createJob(inputStream, { pdfSettings, onDone } = {}) {
       enqueue(jobId);
     })
     .catch((err) => {
-      touch(jobId, { status: 'failed', errorCode: 'upload_failed', message: err.message });
+      clearTimeout(uploadTimer);
+      touch(jobId, { status: 'failed', errorCode: 'upload_failed', message: `${err.message} (${bytesWritten} octets reçus)` });
       tmpfiles.cleanupJobDir(jobId);
       scheduleTtlCleanup(jobId);
       onDone && onDone(err, null);
