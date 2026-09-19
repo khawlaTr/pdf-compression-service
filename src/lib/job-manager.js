@@ -58,7 +58,7 @@ async function compressToTarget(job) {
     await ghostscript.compress({
       inputPath: job.inputPath,
       outputPath: job.outputPath,
-      pdfSettings: 'screen',
+      pdfSettings: '/screen',
       imageResolution: resolutionDpi,
     });
     compressedSize = fs.statSync(job.outputPath).size;

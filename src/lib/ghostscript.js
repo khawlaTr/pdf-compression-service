@@ -18,7 +18,10 @@ function classify(stderr, exitCode) {
   if (/Unrecoverable error|not a PDF|corrupt|Can't find (trailer|xref)/i.test(stderr)) {
     return new GhostscriptError('corrupted_input', 'Le PDF est corrompu ou illisible par Ghostscript.', exitCode);
   }
-  return new GhostscriptError('ghostscript_failed', `Ghostscript a échoué (code ${exitCode}).`, exitCode);
+  // eslint-disable-next-line no-console
+  console.error(`[pdf-compression-service] ghostscript exit ${exitCode}, stderr:\n${stderr}`);
+  const snippet = stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 300);
+  return new GhostscriptError('ghostscript_failed', `Ghostscript a échoué (code ${exitCode}): ${snippet}`, exitCode);
 }
 
 function compress({
