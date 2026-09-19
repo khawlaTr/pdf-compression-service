@@ -21,6 +21,7 @@ function toPublicJob(job) {
     lowGain: job.lowGain,
     expectedOutputSize: job.expectedOutputSizeBytes,
     withinExpectedSize: job.withinExpectedSize,
+    escalatedResolutionDpi: job.escalatedResolutionDpi,
     errorCode: job.errorCode,
     message: job.message,
   };
@@ -39,6 +40,9 @@ function setVerdictHeaders(res, job) {
   if (job.expectedOutputSizeBytes !== undefined) {
     res.set('X-Expected-Output-Size', String(job.expectedOutputSizeBytes));
     res.set('X-Within-Expected-Size', String(job.withinExpectedSize));
+  }
+  if (job.escalatedResolutionDpi) {
+    res.set('X-Escalated-Resolution-Dpi', String(job.escalatedResolutionDpi));
   }
 }
 

@@ -35,6 +35,39 @@ function scheduleTtlCleanup(jobId) {
   }, config.resultTtlSec * 1000).unref();
 }
 
+// DPI values tried in order, in addition to the caller's chosen preset,
+// when a job specifies expectedOutputSizeBytes and the first pass doesn't
+// get under it. /screen (Ghostscript's most aggressive built-in preset,
+// ~72 DPI) is the floor of the normal presets — these go further. Each
+// escalation attempt uses /screen as the base preset (its other quality
+// knobs, not just resolution, are already the most aggressive available)
+// with resolution overridden even lower.
+const ESCALATION_RESOLUTIONS_DPI = [72, 50, 36, 24];
+
+async function compressToTarget(job) {
+  await ghostscript.compress({ inputPath: job.inputPath, outputPath: job.outputPath, pdfSettings: job.pdfSettings });
+  let compressedSize = fs.statSync(job.outputPath).size;
+
+  if (job.expectedOutputSizeBytes === undefined || compressedSize <= job.expectedOutputSizeBytes) {
+    return { compressedSize };
+  }
+
+  let usedResolutionDpi;
+  for (const resolutionDpi of ESCALATION_RESOLUTIONS_DPI) {
+    // eslint-disable-next-line no-await-in-loop
+    await ghostscript.compress({
+      inputPath: job.inputPath,
+      outputPath: job.outputPath,
+      pdfSettings: 'screen',
+      imageResolution: resolutionDpi,
+    });
+    compressedSize = fs.statSync(job.outputPath).size;
+    usedResolutionDpi = resolutionDpi;
+    if (compressedSize <= job.expectedOutputSizeBytes) break;
+  }
+  return { compressedSize, usedResolutionDpi };
+}
+
 function runNext() {
   if (activeCount >= config.maxConcurrentJobs) return;
   const jobId = pendingQueue.shift();
@@ -46,10 +79,8 @@ function runNext() {
   activeCount += 1;
   touch(jobId, { status: 'running' });
 
-  ghostscript
-    .compress({ inputPath: job.inputPath, outputPath: job.outputPath, pdfSettings: job.pdfSettings })
-    .then(() => {
-      const compressedSize = fs.statSync(job.outputPath).size;
+  compressToTarget(job)
+    .then(({ compressedSize, usedResolutionDpi }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -59,6 +90,9 @@ function runNext() {
       if (job.expectedOutputSizeBytes !== undefined) {
         verdict.expectedOutputSize = job.expectedOutputSizeBytes;
         verdict.withinExpectedSize = compressedSize <= job.expectedOutputSizeBytes;
+      }
+      if (usedResolutionDpi) {
+        verdict.escalatedResolutionDpi = usedResolutionDpi;
       }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });

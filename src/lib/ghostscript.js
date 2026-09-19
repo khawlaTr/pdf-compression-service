@@ -21,7 +21,13 @@ function classify(stderr, exitCode) {
   return new GhostscriptError('ghostscript_failed', `Ghostscript a échoué (code ${exitCode}).`, exitCode);
 }
 
-function compress({ inputPath, outputPath, pdfSettings = config.gsPdfSettings, timeoutSec = config.gsTimeoutSec }) {
+function compress({
+  inputPath,
+  outputPath,
+  pdfSettings = config.gsPdfSettings,
+  timeoutSec = config.gsTimeoutSec,
+  imageResolution,
+}) {
   return new Promise((resolve, reject) => {
     const args = [
       '-sDEVICE=pdfwrite',
@@ -31,9 +37,23 @@ function compress({ inputPath, outputPath, pdfSettings = config.gsPdfSettings, t
       '-dSAFER',
       '-dDetectDuplicateImages=true',
       '-dCompressFonts=true',
-      `-sOutputFile=${outputPath}`,
-      inputPath,
     ];
+
+    // Overrides applied after the preset go further than any built-in preset
+    // (including /screen) — used to escalate past a caller-specified target
+    // size when the preset alone doesn't get there.
+    if (imageResolution) {
+      args.push(
+        '-dDownsampleColorImages=true',
+        '-dDownsampleGrayImages=true',
+        '-dDownsampleMonoImages=true',
+        `-dColorImageResolution=${imageResolution}`,
+        `-dGrayImageResolution=${imageResolution}`,
+        `-dMonoImageResolution=${imageResolution}`,
+      );
+    }
+
+    args.push(`-sOutputFile=${outputPath}`, inputPath);
 
     const proc = spawn(config.gsBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
