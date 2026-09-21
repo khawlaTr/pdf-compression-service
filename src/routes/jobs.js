@@ -22,6 +22,7 @@ function toPublicJob(job) {
     expectedOutputSize: job.expectedOutputSizeBytes,
     withinExpectedSize: job.withinExpectedSize,
     escalatedResolutionDpi: job.escalatedResolutionDpi,
+    escalatedGrayscale: job.escalatedGrayscale,
     errorCode: job.errorCode,
     message: job.message,
   };
@@ -43,6 +44,9 @@ function setVerdictHeaders(res, job) {
   }
   if (job.escalatedResolutionDpi) {
     res.set('X-Escalated-Resolution-Dpi', String(job.escalatedResolutionDpi));
+  }
+  if (job.escalatedGrayscale) {
+    res.set('X-Escalated-Grayscale', 'true');
   }
 }
 

@@ -35,14 +35,20 @@ function scheduleTtlCleanup(jobId) {
   }, config.resultTtlSec * 1000).unref();
 }
 
-// DPI values tried in order, in addition to the caller's chosen preset,
-// when a job specifies expectedOutputSizeBytes and the first pass doesn't
-// get under it. /screen (Ghostscript's most aggressive built-in preset,
-// ~72 DPI) is the floor of the normal presets — these go further. Each
-// escalation attempt uses /screen as the base preset (its other quality
-// knobs, not just resolution, are already the most aggressive available)
-// with resolution overridden even lower.
-const ESCALATION_RESOLUTIONS_DPI = [72, 50, 36, 24];
+// Tried in order, in addition to the caller's chosen preset, when a job
+// specifies expectedOutputSizeBytes and the first pass doesn't get under
+// it. /screen (Ghostscript's most aggressive built-in preset, ~72 DPI) is
+// the floor of the normal presets — these go further, first on resolution
+// alone, then (last resort) dropping color entirely. Grayscale loses
+// colored stamps/highlights/logos but keeps text and tables legible far
+// better than pushing resolution alone even lower would.
+const ESCALATION_LEVELS = [
+  { resolutionDpi: 72 },
+  { resolutionDpi: 50 },
+  { resolutionDpi: 36 },
+  { resolutionDpi: 24 },
+  { resolutionDpi: 24, grayscale: true },
+];
 
 async function compressToTarget(job) {
   await ghostscript.compress({ inputPath: job.inputPath, outputPath: job.outputPath, pdfSettings: job.pdfSettings });
@@ -52,20 +58,21 @@ async function compressToTarget(job) {
     return { compressedSize };
   }
 
-  let usedResolutionDpi;
-  for (const resolutionDpi of ESCALATION_RESOLUTIONS_DPI) {
+  let usedLevel;
+  for (const level of ESCALATION_LEVELS) {
     // eslint-disable-next-line no-await-in-loop
     await ghostscript.compress({
       inputPath: job.inputPath,
       outputPath: job.outputPath,
       pdfSettings: '/screen',
-      imageResolution: resolutionDpi,
+      imageResolution: level.resolutionDpi,
+      grayscale: level.grayscale,
     });
     compressedSize = fs.statSync(job.outputPath).size;
-    usedResolutionDpi = resolutionDpi;
+    usedLevel = level;
     if (compressedSize <= job.expectedOutputSizeBytes) break;
   }
-  return { compressedSize, usedResolutionDpi };
+  return { compressedSize, usedResolutionDpi: usedLevel.resolutionDpi, usedGrayscale: !!usedLevel.grayscale };
 }
 
 function runNext() {
@@ -80,7 +87,7 @@ function runNext() {
   touch(jobId, { status: 'running' });
 
   compressToTarget(job)
-    .then(({ compressedSize, usedResolutionDpi }) => {
+    .then(({ compressedSize, usedResolutionDpi, usedGrayscale }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -93,6 +100,9 @@ function runNext() {
       }
       if (usedResolutionDpi) {
         verdict.escalatedResolutionDpi = usedResolutionDpi;
+      }
+      if (usedGrayscale) {
+        verdict.escalatedGrayscale = true;
       }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });

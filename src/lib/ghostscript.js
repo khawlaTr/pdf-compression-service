@@ -11,12 +11,23 @@ class GhostscriptError extends Error {
   }
 }
 
-function classify(stderr, exitCode) {
+function classify(stderr, exitCode, signal) {
   if (/This file requires a password|Password did not work|OwnerPassword/i.test(stderr)) {
     return new GhostscriptError('password_protected', 'Le PDF est protégé par mot de passe.', exitCode);
   }
   if (/Unrecoverable error|not a PDF|corrupt|Can't find (trailer|xref)/i.test(stderr)) {
     return new GhostscriptError('corrupted_input', 'Le PDF est corrompu ou illisible par Ghostscript.', exitCode);
+  }
+  if (exitCode === null && signal) {
+    // No exit code + a signal (SIGKILL almost always means the kernel OOM
+    // killer stepped in — a cgroup memory limit hit, not a Ghostscript bug).
+    // eslint-disable-next-line no-console
+    console.error(`[pdf-compression-service] ghostscript killed by signal ${signal} (likely OOM)`);
+    return new GhostscriptError(
+      'ghostscript_killed',
+      `Ghostscript a été interrompu par le système (signal ${signal}), probablement par manque de mémoire.`,
+      exitCode,
+    );
   }
   // eslint-disable-next-line no-console
   console.error(`[pdf-compression-service] ghostscript exit ${exitCode}, stderr:\n${stderr}`);
@@ -30,6 +41,7 @@ function compress({
   pdfSettings = config.gsPdfSettings,
   timeoutSec = config.gsTimeoutSec,
   imageResolution,
+  grayscale,
 }) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -56,6 +68,10 @@ function compress({
       );
     }
 
+    if (grayscale) {
+      args.push('-sColorConversionStrategy=Gray', '-dProcessColorModel=/DeviceGray');
+    }
+
     args.push(`-sOutputFile=${outputPath}`, inputPath);
 
     const proc = spawn(config.gsBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -80,12 +96,12 @@ function compress({
       reject(new GhostscriptError('ghostscript_failed', `Impossible de lancer Ghostscript: ${err.message}`));
     });
 
-    proc.on('close', (exitCode) => {
+    proc.on('close', (exitCode, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (exitCode !== 0) {
-        reject(classify(stderr, exitCode));
+        reject(classify(stderr, exitCode, signal));
       } else {
         resolve({ stderr });
       }

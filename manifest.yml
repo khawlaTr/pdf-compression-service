@@ -3,7 +3,7 @@ applications:
   - name: pdf-compression-service
     docker:
       image: ghcr.io/khawlatr/pdf-compression-service:latest
-    memory: 1536M
+    memory: 2048M
     disk_quota: 3072M
     instances: 1
     health-check-type: http
