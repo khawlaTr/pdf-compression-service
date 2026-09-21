@@ -35,20 +35,17 @@ function scheduleTtlCleanup(jobId) {
   }, config.resultTtlSec * 1000).unref();
 }
 
-// Tried in order, in addition to the caller's chosen preset, when a job
-// specifies expectedOutputSizeBytes and the first pass doesn't get under
-// it. /screen (Ghostscript's most aggressive built-in preset, ~72 DPI) is
-// the floor of the normal presets — these go further, first on resolution
-// alone, then (last resort) dropping color entirely. Grayscale loses
-// colored stamps/highlights/logos but keeps text and tables legible far
-// better than pushing resolution alone even lower would.
-const ESCALATION_LEVELS = [
-  { resolutionDpi: 72 },
-  { resolutionDpi: 50 },
-  { resolutionDpi: 36 },
-  { resolutionDpi: 24 },
-  { resolutionDpi: 24, grayscale: true },
-];
+// Baseline image resolution (DPI) of each built-in preset, used to turn a
+// first-pass result into a targeted estimate for the second pass instead of
+// walking a fixed ladder — each full pass reprocesses the entire document
+// from scratch, so a fixed 5-rung ladder means up to 5x the time of a
+// single pass on a large file (observed: ~11 min on 200MB vs ~2 min for a
+// single-pass tool). Embedded image size scales roughly with the square of
+// the resolution, so resolution can be estimated directly from how far the
+// first attempt missed the target, converging in 2 passes in most cases.
+const PRESET_BASELINE_DPI = { '/screen': 72, '/ebook': 150, '/printer': 300, '/prepress': 300 };
+const MIN_ESCALATION_DPI = 24;
+const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseline
 
 async function compressToTarget(job) {
   await ghostscript.compress({ inputPath: job.inputPath, outputPath: job.outputPath, pdfSettings: job.pdfSettings });
@@ -58,21 +55,36 @@ async function compressToTarget(job) {
     return { compressedSize };
   }
 
-  let usedLevel;
-  for (const level of ESCALATION_LEVELS) {
-    // eslint-disable-next-line no-await-in-loop
-    await ghostscript.compress({
-      inputPath: job.inputPath,
-      outputPath: job.outputPath,
-      pdfSettings: '/screen',
-      imageResolution: level.resolutionDpi,
-      grayscale: level.grayscale,
-    });
-    compressedSize = fs.statSync(job.outputPath).size;
-    usedLevel = level;
-    if (compressedSize <= job.expectedOutputSizeBytes) break;
+  const baselineDpi = PRESET_BASELINE_DPI[job.pdfSettings] || PRESET_BASELINE_DPI['/ebook'];
+  // Aim a bit under the target (0.85x) since the size/resolution relationship
+  // is only approximate (JPEG re-encoding overhead, non-image content) —
+  // better to slightly undershoot than need a 3rd pass.
+  const rawEstimate = baselineDpi * Math.sqrt((job.expectedOutputSizeBytes * 0.85) / compressedSize);
+  const estimatedDpi = Math.round(Math.min(MAX_ESCALATION_DPI, Math.max(MIN_ESCALATION_DPI, rawEstimate)));
+
+  await ghostscript.compress({
+    inputPath: job.inputPath,
+    outputPath: job.outputPath,
+    pdfSettings: '/screen',
+    imageResolution: estimatedDpi,
+  });
+  compressedSize = fs.statSync(job.outputPath).size;
+  if (compressedSize <= job.expectedOutputSizeBytes) {
+    return { compressedSize, usedResolutionDpi: estimatedDpi };
   }
-  return { compressedSize, usedResolutionDpi: usedLevel.resolutionDpi, usedGrayscale: !!usedLevel.grayscale };
+
+  // The estimate missed (unusual content, e.g. mostly-vector pages where
+  // resolution barely matters) — one guaranteed floor attempt, no more
+  // guessing, to bound worst-case time at 3 passes total.
+  await ghostscript.compress({
+    inputPath: job.inputPath,
+    outputPath: job.outputPath,
+    pdfSettings: '/screen',
+    imageResolution: MIN_ESCALATION_DPI,
+    grayscale: true,
+  });
+  compressedSize = fs.statSync(job.outputPath).size;
+  return { compressedSize, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true };
 }
 
 function runNext() {
