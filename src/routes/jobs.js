@@ -26,6 +26,7 @@ function toPublicJob(job) {
     strippedRepeatedImages: job.strippedRepeatedImages,
     strippedReferences: job.strippedReferences,
     dedupedReferences: job.dedupedReferences,
+    structuredSize: job.structuredSize,
     losslessOnly: job.losslessOnly,
     errorCode: job.errorCode,
     message: job.message,

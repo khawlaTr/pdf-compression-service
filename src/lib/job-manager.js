@@ -72,10 +72,16 @@ async function prepareInput(job) {
   if (config.structureEnabled && job.originalSize <= config.structureMaxInputBytes) {
     const structPath = path.join(path.dirname(job.inputPath), 'input-structured.pdf');
     try {
+      const startedAt = Date.now();
       const summary = await optimizeStructure.optimizeStructure({ inputPath: currentPath, outputPath: structPath });
       info.dedupedReferences = summary.dedupedReferences;
       info.structuredSize = summary.sizeAfter;
       currentPath = structPath;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[pdf-compression-service] structure: ${summary.sizeBefore} -> ${summary.sizeAfter} octets, ` +
+        `${summary.dedupedReferences} refs dedupliquees, ${((Date.now() - startedAt) / 1000).toFixed(0)}s`,
+      );
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[pdf-compression-service] optimize_structure failed, skipped: ${err.message}`);
@@ -87,6 +93,10 @@ async function prepareInput(job) {
 
 async function compressToTarget(job) {
   const { inputPath: effectiveInputPath, info: prepInfo } = await prepareInput(job);
+  // Recorded on the job immediately: if a later Ghostscript pass fails or
+  // times out, the verdict still shows what preparation achieved, instead of
+  // leaving it impossible to tell whether it even ran.
+  touch(job.jobId, prepInfo);
   const stripped = prepInfo;
 
   // Lossless first: if the structural pass alone already meets the caller's
