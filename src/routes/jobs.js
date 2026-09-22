@@ -25,6 +25,8 @@ function toPublicJob(job) {
     escalatedGrayscale: job.escalatedGrayscale,
     strippedRepeatedImages: job.strippedRepeatedImages,
     strippedReferences: job.strippedReferences,
+    dedupedReferences: job.dedupedReferences,
+    losslessOnly: job.losslessOnly,
     errorCode: job.errorCode,
     message: job.message,
   };
@@ -53,6 +55,12 @@ function setVerdictHeaders(res, job) {
   if (job.strippedRepeatedImages !== undefined) {
     res.set('X-Stripped-Repeated-Images', String(job.strippedRepeatedImages));
     res.set('X-Stripped-References', String(job.strippedReferences));
+  }
+  if (job.dedupedReferences !== undefined) {
+    res.set('X-Deduped-References', String(job.dedupedReferences));
+  }
+  if (job.losslessOnly) {
+    res.set('X-Lossless-Only', 'true');
   }
 }
 

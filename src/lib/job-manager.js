@@ -9,6 +9,7 @@ const config = require('../config');
 const tmpfiles = require('./tmpfiles');
 const ghostscript = require('./ghostscript');
 const stripImages = require('./strip-repeated-images');
+const optimizeStructure = require('./optimize-structure');
 const { computeVerdict, parseSize } = require('./sizing');
 
 const jobs = new Map(); // jobId -> job record
@@ -48,26 +49,59 @@ const PRESET_BASELINE_DPI = { '/screen': 72, '/ebook': 150, '/printer': 300, '/p
 const MIN_ESCALATION_DPI = 24;
 const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseline
 
-// Best-effort: on failure (unsupported PDF quirk, timeout), fall back to the
-// original input untouched rather than failing the whole job — this step is
-// an optimization, not a correctness requirement.
+// Each preparation step is best-effort: on failure (unsupported PDF quirk,
+// timeout, memory) it falls back to the input it was given rather than
+// failing the job, since none of them is required for correctness.
 async function prepareInput(job) {
-  const strippedPath = path.join(path.dirname(job.inputPath), 'input-stripped.pdf');
-  try {
-    const summary = await stripImages.stripRepeatedImages({ inputPath: job.inputPath, outputPath: strippedPath });
-    return { inputPath: strippedPath, summary };
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error(`[pdf-compression-service] strip_repeated_images failed, using original input: ${err.message}`);
-    return { inputPath: job.inputPath, summary: null };
+  let currentPath = job.inputPath;
+  const info = {};
+
+  if (config.stripRepeatedImagesEnabled) {
+    const strippedPath = path.join(path.dirname(job.inputPath), 'input-stripped.pdf');
+    try {
+      const summary = await stripImages.stripRepeatedImages({ inputPath: currentPath, outputPath: strippedPath });
+      info.strippedRepeatedImages = summary.repeatedImages;
+      info.strippedReferences = summary.removedRefs;
+      currentPath = strippedPath;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[pdf-compression-service] strip_repeated_images failed, skipped: ${err.message}`);
+    }
   }
+
+  if (config.structureEnabled && job.originalSize <= config.structureMaxInputBytes) {
+    const structPath = path.join(path.dirname(job.inputPath), 'input-structured.pdf');
+    try {
+      const summary = await optimizeStructure.optimizeStructure({ inputPath: currentPath, outputPath: structPath });
+      info.dedupedReferences = summary.dedupedReferences;
+      info.structuredSize = summary.sizeAfter;
+      currentPath = structPath;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[pdf-compression-service] optimize_structure failed, skipped: ${err.message}`);
+    }
+  }
+
+  return { inputPath: currentPath, info };
 }
 
 async function compressToTarget(job) {
-  const { inputPath: effectiveInputPath, summary: stripSummary } = await prepareInput(job);
-  const stripped = stripSummary
-    ? { strippedRepeatedImages: stripSummary.repeatedImages, strippedReferences: stripSummary.removedRefs }
-    : {};
+  const { inputPath: effectiveInputPath, info: prepInfo } = await prepareInput(job);
+  const stripped = prepInfo;
+
+  // Lossless first: if the structural pass alone already meets the caller's
+  // target, stop there rather than degrading image quality to reach a size
+  // that has already been reached. On merged documents this is the common
+  // case, and it is the difference between an untouched document and one
+  // resampled to grayscale at 24 DPI.
+  if (
+    prepInfo.structuredSize !== undefined &&
+    job.expectedOutputSizeBytes !== undefined &&
+    prepInfo.structuredSize <= job.expectedOutputSizeBytes
+  ) {
+    fs.copyFileSync(effectiveInputPath, job.outputPath);
+    return { compressedSize: prepInfo.structuredSize, losslessOnly: true, ...stripped };
+  }
 
   // Always on: duplicate-image detection is what makes a repeated logo/stamp
   // across thousands of pages cost roughly one copy instead of one per page
@@ -136,7 +170,8 @@ function runNext() {
   touch(jobId, { status: 'running' });
 
   compressToTarget(job)
-    .then(({ compressedSize, usedResolutionDpi, usedGrayscale, strippedRepeatedImages, strippedReferences }) => {
+    .then(({ compressedSize, usedResolutionDpi, usedGrayscale, strippedRepeatedImages, strippedReferences,
+             dedupedReferences, losslessOnly }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -156,6 +191,12 @@ function runNext() {
       if (strippedRepeatedImages !== undefined) {
         verdict.strippedRepeatedImages = strippedRepeatedImages;
         verdict.strippedReferences = strippedReferences;
+      }
+      if (dedupedReferences !== undefined) {
+        verdict.dedupedReferences = dedupedReferences;
+      }
+      if (losslessOnly) {
+        verdict.losslessOnly = true;
       }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });

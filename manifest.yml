@@ -3,7 +3,7 @@ applications:
   - name: pdf-compression-service
     docker:
       image: ghcr.io/khawlatr/pdf-compression-service:latest
-    memory: 2048M
+    memory: 4096M
     disk_quota: 3072M
     instances: 1
     health-check-type: http
@@ -19,4 +19,5 @@ applications:
       BASE64_LIMIT_BYTES: 104857600
       MIN_GAIN_RATIO: 0.05
       RESULT_TTL_SEC: 1800
+      STRUCTURE_MAX_INPUT_BYTES: 262144000
       TMP_DIR: /tmp/gs-jobs
