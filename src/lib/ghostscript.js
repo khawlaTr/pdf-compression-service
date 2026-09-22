@@ -53,6 +53,14 @@ function compress({
       '-dSAFER',
       `-dDetectDuplicateImages=${detectDuplicateImages}`,
       '-dCompressFonts=true',
+      // Caps how much image data Ghostscript buffers fully in memory before
+      // switching to banded (strip-by-strip) rendering — bounds peak memory
+      // to roughly this value regardless of how high-resolution the source
+      // images are, trading some speed for it. Without this, memory scales
+      // with the *source* image resolution, not the compression target, so
+      // even the most aggressive target (grayscale, lowest DPI) can still
+      // OOM on a large enough source image — confirmed in production.
+      `-dMaxBitmap=${config.gsMaxBitmapBytes}`,
     ];
 
     // Overrides applied after the preset go further than any built-in preset

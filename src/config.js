@@ -26,6 +26,7 @@ module.exports = {
   resultTtlSec: int('RESULT_TTL_SEC', 1800),
   uploadTimeoutSec: int('UPLOAD_TIMEOUT_SEC', 600),
   duplicateDetectionMaxBytes: int('DUPLICATE_DETECTION_MAX_BYTES', 150 * 1024 * 1024),
+  gsMaxBitmapBytes: int('GS_MAX_BITMAP_BYTES', 16 * 1024 * 1024),
   tmpDir: process.env.TMP_DIR || '/tmp/gs-jobs',
   authDisabled: process.env.AUTH_DISABLED === 'true',
 };
