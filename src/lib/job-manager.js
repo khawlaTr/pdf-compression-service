@@ -8,6 +8,7 @@ const { pipeline } = require('stream/promises');
 const config = require('../config');
 const tmpfiles = require('./tmpfiles');
 const ghostscript = require('./ghostscript');
+const stripImages = require('./strip-repeated-images');
 const { computeVerdict, parseSize } = require('./sizing');
 
 const jobs = new Map(); // jobId -> job record
@@ -47,7 +48,24 @@ const PRESET_BASELINE_DPI = { '/screen': 72, '/ebook': 150, '/printer': 300, '/p
 const MIN_ESCALATION_DPI = 24;
 const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseline
 
+// Best-effort: on failure (unsupported PDF quirk, timeout), fall back to the
+// original input untouched rather than failing the whole job — this step is
+// an optimization, not a correctness requirement.
+async function prepareInput(job) {
+  const strippedPath = path.join(path.dirname(job.inputPath), 'input-stripped.pdf');
+  try {
+    await stripImages.stripRepeatedImages({ inputPath: job.inputPath, outputPath: strippedPath });
+    return strippedPath;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[pdf-compression-service] strip_repeated_images failed, using original input: ${err.message}`);
+    return job.inputPath;
+  }
+}
+
 async function compressToTarget(job) {
+  const effectiveInputPath = await prepareInput(job);
+
   // Always on: duplicate-image detection is what makes a repeated logo/stamp
   // across thousands of pages cost roughly one copy instead of one per page
   // — confirmed in production to be the dominant factor on a 3000+ page
@@ -58,7 +76,7 @@ async function compressToTarget(job) {
   const detectDuplicateImages = true;
 
   await ghostscript.compress({
-    inputPath: job.inputPath,
+    inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: job.pdfSettings,
     detectDuplicateImages,
@@ -77,7 +95,7 @@ async function compressToTarget(job) {
   const estimatedDpi = Math.round(Math.min(MAX_ESCALATION_DPI, Math.max(MIN_ESCALATION_DPI, rawEstimate)));
 
   await ghostscript.compress({
-    inputPath: job.inputPath,
+    inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: '/screen',
     imageResolution: estimatedDpi,
@@ -92,7 +110,7 @@ async function compressToTarget(job) {
   // resolution barely matters) — one guaranteed floor attempt, no more
   // guessing, to bound worst-case time at 3 passes total.
   await ghostscript.compress({
-    inputPath: job.inputPath,
+    inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: '/screen',
     imageResolution: MIN_ESCALATION_DPI,

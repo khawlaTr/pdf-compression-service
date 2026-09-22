@@ -26,6 +26,9 @@ module.exports = {
   resultTtlSec: int('RESULT_TTL_SEC', 1800),
   uploadTimeoutSec: int('UPLOAD_TIMEOUT_SEC', 600),
   gsMaxBitmapBytes: int('GS_MAX_BITMAP_BYTES', 16 * 1024 * 1024),
+  pythonBin: process.env.PYTHON_BIN || 'python3',
+  repeatedImageMinPages: int('REPEATED_IMAGE_MIN_PAGES', 15),
+  stripImagesTimeoutSec: int('STRIP_IMAGES_TIMEOUT_SEC', 300),
   tmpDir: process.env.TMP_DIR || '/tmp/gs-jobs',
   authDisabled: process.env.AUTH_DISABLED === 'true',
 };
