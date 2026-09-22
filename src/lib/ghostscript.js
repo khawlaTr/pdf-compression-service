@@ -42,6 +42,7 @@ function compress({
   timeoutSec = config.gsTimeoutSec,
   imageResolution,
   grayscale,
+  detectDuplicateImages = true,
 }) {
   return new Promise((resolve, reject) => {
     const args = [
@@ -50,7 +51,7 @@ function compress({
       '-dNOPAUSE',
       '-dBATCH',
       '-dSAFER',
-      '-dDetectDuplicateImages=true',
+      `-dDetectDuplicateImages=${detectDuplicateImages}`,
       '-dCompressFonts=true',
     ];
 

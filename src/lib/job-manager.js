@@ -48,7 +48,19 @@ const MIN_ESCALATION_DPI = 24;
 const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseline
 
 async function compressToTarget(job) {
-  await ghostscript.compress({ inputPath: job.inputPath, outputPath: job.outputPath, pdfSettings: job.pdfSettings });
+  // Duplicate-image detection keeps a running record of every image seen so
+  // far across the *whole* document to catch repeats (logos, stamps) — time
+  // cost scales with page/image count. Above a size threshold, the extra
+  // compression it buys is rarely worth what it adds to an already-long
+  // multi-pass run, so it's skipped there.
+  const detectDuplicateImages = job.originalSize <= config.duplicateDetectionMaxBytes;
+
+  await ghostscript.compress({
+    inputPath: job.inputPath,
+    outputPath: job.outputPath,
+    pdfSettings: job.pdfSettings,
+    detectDuplicateImages,
+  });
   let compressedSize = fs.statSync(job.outputPath).size;
 
   if (job.expectedOutputSizeBytes === undefined || compressedSize <= job.expectedOutputSizeBytes) {
@@ -67,6 +79,7 @@ async function compressToTarget(job) {
     outputPath: job.outputPath,
     pdfSettings: '/screen',
     imageResolution: estimatedDpi,
+    detectDuplicateImages,
   });
   compressedSize = fs.statSync(job.outputPath).size;
   if (compressedSize <= job.expectedOutputSizeBytes) {
@@ -82,6 +95,7 @@ async function compressToTarget(job) {
     pdfSettings: '/screen',
     imageResolution: MIN_ESCALATION_DPI,
     grayscale: true,
+    detectDuplicateImages,
   });
   compressedSize = fs.statSync(job.outputPath).size;
   return { compressedSize, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true };
