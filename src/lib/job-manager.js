@@ -48,12 +48,14 @@ const MIN_ESCALATION_DPI = 24;
 const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseline
 
 async function compressToTarget(job) {
-  // Duplicate-image detection keeps a running record of every image seen so
-  // far across the *whole* document to catch repeats (logos, stamps) — time
-  // cost scales with page/image count. Above a size threshold, the extra
-  // compression it buys is rarely worth what it adds to an already-long
-  // multi-pass run, so it's skipped there.
-  const detectDuplicateImages = job.originalSize <= config.duplicateDetectionMaxBytes;
+  // Always on: duplicate-image detection is what makes a repeated logo/stamp
+  // across thousands of pages cost roughly one copy instead of one per page
+  // — confirmed in production to be the dominant factor on a 3000+ page
+  // invoice with the same logo on every page (12.3 MB floor even at the
+  // most aggressive resolution/grayscale settings, with detection off above
+  // 150 MB). The speed cost is real but far less important than actually
+  // reaching a usable output size for exactly this kind of document.
+  const detectDuplicateImages = true;
 
   await ghostscript.compress({
     inputPath: job.inputPath,
