@@ -21,10 +21,15 @@ function stripRepeatedImages({
 }) {
   return new Promise((resolve, reject) => {
     const proc = spawn(config.pythonBin, [SCRIPT_PATH, inputPath, outputPath, String(minPages)], {
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let stdout = '';
     let stderr = '';
     let settled = false;
+
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
 
     const timer = setTimeout(() => {
       if (settled) return;
@@ -50,8 +55,12 @@ function stripRepeatedImages({
       clearTimeout(timer);
       if (code !== 0) {
         reject(new Error(`strip_repeated_images a échoué (code ${code}): ${stderr.trim().slice(-500)}`));
-      } else {
-        resolve({ stderr });
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout.trim()));
+      } catch (err) {
+        reject(new Error(`Sortie inattendue de strip_repeated_images: ${stdout.trim().slice(0, 200)}`));
       }
     });
   });

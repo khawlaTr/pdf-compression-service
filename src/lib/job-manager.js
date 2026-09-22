@@ -54,17 +54,20 @@ const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseli
 async function prepareInput(job) {
   const strippedPath = path.join(path.dirname(job.inputPath), 'input-stripped.pdf');
   try {
-    await stripImages.stripRepeatedImages({ inputPath: job.inputPath, outputPath: strippedPath });
-    return strippedPath;
+    const summary = await stripImages.stripRepeatedImages({ inputPath: job.inputPath, outputPath: strippedPath });
+    return { inputPath: strippedPath, summary };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`[pdf-compression-service] strip_repeated_images failed, using original input: ${err.message}`);
-    return job.inputPath;
+    return { inputPath: job.inputPath, summary: null };
   }
 }
 
 async function compressToTarget(job) {
-  const effectiveInputPath = await prepareInput(job);
+  const { inputPath: effectiveInputPath, summary: stripSummary } = await prepareInput(job);
+  const stripped = stripSummary
+    ? { strippedRepeatedImages: stripSummary.repeatedImages, strippedReferences: stripSummary.removedRefs }
+    : {};
 
   // Always on: duplicate-image detection is what makes a repeated logo/stamp
   // across thousands of pages cost roughly one copy instead of one per page
@@ -84,7 +87,7 @@ async function compressToTarget(job) {
   let compressedSize = fs.statSync(job.outputPath).size;
 
   if (job.expectedOutputSizeBytes === undefined || compressedSize <= job.expectedOutputSizeBytes) {
-    return { compressedSize };
+    return { compressedSize, ...stripped };
   }
 
   const baselineDpi = PRESET_BASELINE_DPI[job.pdfSettings] || PRESET_BASELINE_DPI['/ebook'];
@@ -103,7 +106,7 @@ async function compressToTarget(job) {
   });
   compressedSize = fs.statSync(job.outputPath).size;
   if (compressedSize <= job.expectedOutputSizeBytes) {
-    return { compressedSize, usedResolutionDpi: estimatedDpi };
+    return { compressedSize, usedResolutionDpi: estimatedDpi, ...stripped };
   }
 
   // The estimate missed (unusual content, e.g. mostly-vector pages where
@@ -118,7 +121,7 @@ async function compressToTarget(job) {
     detectDuplicateImages,
   });
   compressedSize = fs.statSync(job.outputPath).size;
-  return { compressedSize, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true };
+  return { compressedSize, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true, ...stripped };
 }
 
 function runNext() {
@@ -133,7 +136,7 @@ function runNext() {
   touch(jobId, { status: 'running' });
 
   compressToTarget(job)
-    .then(({ compressedSize, usedResolutionDpi, usedGrayscale }) => {
+    .then(({ compressedSize, usedResolutionDpi, usedGrayscale, strippedRepeatedImages, strippedReferences }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -149,6 +152,10 @@ function runNext() {
       }
       if (usedGrayscale) {
         verdict.escalatedGrayscale = true;
+      }
+      if (strippedRepeatedImages !== undefined) {
+        verdict.strippedRepeatedImages = strippedRepeatedImages;
+        verdict.strippedReferences = strippedReferences;
       }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });

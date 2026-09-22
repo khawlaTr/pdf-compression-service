@@ -23,6 +23,8 @@ function toPublicJob(job) {
     withinExpectedSize: job.withinExpectedSize,
     escalatedResolutionDpi: job.escalatedResolutionDpi,
     escalatedGrayscale: job.escalatedGrayscale,
+    strippedRepeatedImages: job.strippedRepeatedImages,
+    strippedReferences: job.strippedReferences,
     errorCode: job.errorCode,
     message: job.message,
   };
@@ -47,6 +49,10 @@ function setVerdictHeaders(res, job) {
   }
   if (job.escalatedGrayscale) {
     res.set('X-Escalated-Grayscale', 'true');
+  }
+  if (job.strippedRepeatedImages !== undefined) {
+    res.set('X-Stripped-Repeated-Images', String(job.strippedRepeatedImages));
+    res.set('X-Stripped-References', String(job.strippedReferences));
   }
 }
 
