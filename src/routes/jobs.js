@@ -28,6 +28,7 @@ function toPublicJob(job) {
     dedupedReferences: job.dedupedReferences,
     structuredSize: job.structuredSize,
     losslessOnly: job.losslessOnly,
+    bestEffort: job.bestEffort,
     errorCode: job.errorCode,
     message: job.message,
   };
@@ -62,6 +63,9 @@ function setVerdictHeaders(res, job) {
   }
   if (job.losslessOnly) {
     res.set('X-Lossless-Only', 'true');
+  }
+  if (job.bestEffort) {
+    res.set('X-Best-Effort', String(job.bestEffort));
   }
 }
 

@@ -92,6 +92,9 @@ async function prepareInput(job) {
 }
 
 async function compressToTarget(job) {
+  const deadline = Date.now() + config.jobDeadlineSec * 1000;
+  const remainingSec = () => Math.floor((deadline - Date.now()) / 1000);
+
   const { inputPath: effectiveInputPath, info: prepInfo } = await prepareInput(job);
   // Recorded on the job immediately: if a later Ghostscript pass fails or
   // times out, the verdict still shows what preparation achieved, instead of
@@ -122,13 +125,48 @@ async function compressToTarget(job) {
   // reaching a usable output size for exactly this kind of document.
   const detectDuplicateImages = true;
 
-  await ghostscript.compress({
+  // Falling back to the structural result matters more than reaching the
+  // target: a caller that gets a larger-but-valid PDF can still decide what
+  // to do with it, whereas a failed job leaves it with nothing after having
+  // waited many minutes. Production kept hitting exactly that — repeated
+  // 900s Ghostscript timeouts on a 185 MB file, returning no document at all.
+  const structuralFallback = prepInfo.structuredSize !== undefined;
+  const bestEffort = (reason) => {
+    if (!structuralFallback) return null;
+    // eslint-disable-next-line no-console
+    console.warn(`[pdf-compression-service] ${reason} — renvoi du resultat structurel`);
+    fs.copyFileSync(effectiveInputPath, job.outputPath);
+    return { compressedSize: prepInfo.structuredSize, losslessOnly: true, bestEffort: reason, ...stripped };
+  };
+
+  const runPass = async (label, options) => {
+    const budget = remainingSec();
+    if (budget < 30) {
+      return { timedOut: true, reason: `budget epuise avant la passe ${label}` };
+    }
+    const startedAt = Date.now();
+    try {
+      await ghostscript.compress({ ...options, timeoutSec: Math.min(config.gsTimeoutSec, budget) });
+    } catch (err) {
+      return { failed: true, reason: `passe ${label}: ${err.message}`, err };
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[pdf-compression-service] gs ${label}: ${((Date.now() - startedAt) / 1000).toFixed(0)}s`);
+    return { size: fs.statSync(job.outputPath).size };
+  };
+
+  let pass = await runPass('initiale', {
     inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: job.pdfSettings,
     detectDuplicateImages,
   });
-  let compressedSize = fs.statSync(job.outputPath).size;
+  if (pass.size === undefined) {
+    const fallback = bestEffort(pass.reason);
+    if (fallback) return fallback;
+    throw pass.err || new Error(pass.reason);
+  }
+  let compressedSize = pass.size;
 
   if (job.expectedOutputSizeBytes === undefined || compressedSize <= job.expectedOutputSizeBytes) {
     return { compressedSize, ...stripped };
@@ -141,14 +179,18 @@ async function compressToTarget(job) {
   const rawEstimate = baselineDpi * Math.sqrt((job.expectedOutputSizeBytes * 0.85) / compressedSize);
   const estimatedDpi = Math.round(Math.min(MAX_ESCALATION_DPI, Math.max(MIN_ESCALATION_DPI, rawEstimate)));
 
-  await ghostscript.compress({
+  pass = await runPass(`estimee ${estimatedDpi}dpi`, {
     inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: '/screen',
     imageResolution: estimatedDpi,
     detectDuplicateImages,
   });
-  compressedSize = fs.statSync(job.outputPath).size;
+  if (pass.size === undefined) {
+    // The previous pass's output is still on disk and is valid, just bigger.
+    return { compressedSize, bestEffort: pass.reason, ...stripped };
+  }
+  compressedSize = pass.size;
   if (compressedSize <= job.expectedOutputSizeBytes) {
     return { compressedSize, usedResolutionDpi: estimatedDpi, ...stripped };
   }
@@ -156,7 +198,7 @@ async function compressToTarget(job) {
   // The estimate missed (unusual content, e.g. mostly-vector pages where
   // resolution barely matters) — one guaranteed floor attempt, no more
   // guessing, to bound worst-case time at 3 passes total.
-  await ghostscript.compress({
+  pass = await runPass('plancher gris 24dpi', {
     inputPath: effectiveInputPath,
     outputPath: job.outputPath,
     pdfSettings: '/screen',
@@ -164,8 +206,10 @@ async function compressToTarget(job) {
     grayscale: true,
     detectDuplicateImages,
   });
-  compressedSize = fs.statSync(job.outputPath).size;
-  return { compressedSize, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true, ...stripped };
+  if (pass.size === undefined) {
+    return { compressedSize, usedResolutionDpi: estimatedDpi, bestEffort: pass.reason, ...stripped };
+  }
+  return { compressedSize: pass.size, usedResolutionDpi: MIN_ESCALATION_DPI, usedGrayscale: true, ...stripped };
 }
 
 function runNext() {
@@ -181,7 +225,7 @@ function runNext() {
 
   compressToTarget(job)
     .then(({ compressedSize, usedResolutionDpi, usedGrayscale, strippedRepeatedImages, strippedReferences,
-             dedupedReferences, losslessOnly }) => {
+             dedupedReferences, losslessOnly, bestEffort }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -207,6 +251,9 @@ function runNext() {
       }
       if (losslessOnly) {
         verdict.losslessOnly = true;
+      }
+      if (bestEffort) {
+        verdict.bestEffort = bestEffort;
       }
       touch(jobId, { status: 'done', ...verdict });
       job.onDone && job.onDone(null, { ...jobs.get(jobId) });

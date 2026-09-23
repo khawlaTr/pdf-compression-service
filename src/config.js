@@ -24,6 +24,11 @@ module.exports = {
   base64LimitBytes: int('BASE64_LIMIT_BYTES', 100 * 1024 * 1024),
   minGainRatio: float('MIN_GAIN_RATIO', 0.05),
   resultTtlSec: int('RESULT_TTL_SEC', 1800),
+  // Whole-job budget across every Ghostscript pass. Without it, three passes
+  // of up to GS_TIMEOUT_SEC each could run for 45 minutes and then return
+  // nothing — far past any caller's own patience. When it runs out the job
+  // returns the best result obtained so far instead of failing.
+  jobDeadlineSec: int('JOB_DEADLINE_SEC', 900),
   uploadTimeoutSec: int('UPLOAD_TIMEOUT_SEC', 600),
   gsMaxBitmapBytes: int('GS_MAX_BITMAP_BYTES', 16 * 1024 * 1024),
   pythonBin: process.env.PYTHON_BIN || 'python3',
