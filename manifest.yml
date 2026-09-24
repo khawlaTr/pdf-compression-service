@@ -4,7 +4,7 @@ applications:
     docker:
       image: ghcr.io/khawlatr/pdf-compression-service:latest
     memory: 4096M
-    disk_quota: 3072M
+    disk_quota: 6144M
     instances: 1
     health-check-type: http
     health-check-http-endpoint: /health
@@ -20,5 +20,7 @@ applications:
       MIN_GAIN_RATIO: 0.05
       RESULT_TTL_SEC: 7200
       JOB_DEADLINE_SEC: 900
-      STRUCTURE_MAX_INPUT_BYTES: 262144000
+      STRUCTURE_MAX_INPUT_BYTES: 1610612736
+      STRUCTURE_CHUNK_PAGES: 250
+      STRUCTURE_CHUNK_ABOVE_BYTES: 31457280
       TMP_DIR: /tmp/gs-jobs

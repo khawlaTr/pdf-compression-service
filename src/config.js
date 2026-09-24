@@ -32,11 +32,13 @@ module.exports = {
   uploadTimeoutSec: int('UPLOAD_TIMEOUT_SEC', 600),
   gsMaxBitmapBytes: int('GS_MAX_BITMAP_BYTES', 16 * 1024 * 1024),
   pythonBin: process.env.PYTHON_BIN || 'python3',
-  // Structural (lossless) pass. Peak memory runs ~12x the input file size —
-  // libqpdf's in-memory object graph, not something the code above it can
-  // trim — so it is skipped above this threshold to protect the instance.
+  // Structural (lossless) pass. Documents above structureChunkAboveBytes are
+  // processed in page-range chunks, which bounds peak memory to the size of a
+  // chunk instead of the whole document (185 MB peak measured on a 224 MB /
+  // 3000 page file). The remaining cap is a guard against pathological
+  // inputs, not a memory limit.
   structureEnabled: process.env.STRUCTURE_ENABLED !== 'false',
-  structureMaxInputBytes: int('STRUCTURE_MAX_INPUT_BYTES', 150 * 1024 * 1024),
+  structureMaxInputBytes: int('STRUCTURE_MAX_INPUT_BYTES', 1536 * 1024 * 1024),
   structureTimeoutSec: int('STRUCTURE_TIMEOUT_SEC', 900),
   // Removing a repeated logo changes what the document looks like, unlike the
   // structural pass which is byte-for-byte lossless; off unless asked for.
