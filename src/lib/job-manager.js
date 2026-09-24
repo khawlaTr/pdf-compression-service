@@ -52,7 +52,7 @@ const MAX_ESCALATION_DPI = 72; // no point escalating above /screen's own baseli
 // Each preparation step is best-effort: on failure (unsupported PDF quirk,
 // timeout, memory) it falls back to the input it was given rather than
 // failing the job, since none of them is required for correctness.
-async function prepareInput(job) {
+async function prepareInput(job, budgetSec) {
   let currentPath = job.inputPath;
   const info = {};
 
@@ -73,7 +73,12 @@ async function prepareInput(job) {
     const structPath = path.join(path.dirname(job.inputPath), 'input-structured.pdf');
     try {
       const startedAt = Date.now();
-      const summary = await optimizeStructure.optimizeStructure({ inputPath: currentPath, outputPath: structPath });
+      const summary = await optimizeStructure.optimizeStructure({
+        inputPath: currentPath,
+        outputPath: structPath,
+        budgetSec,
+        timeoutSec: Math.max(60, Math.floor(budgetSec * 1.2)),
+      });
       info.dedupedReferences = summary.dedupedReferences;
       info.structuredSize = summary.sizeAfter;
       currentPath = structPath;
@@ -95,7 +100,13 @@ async function compressToTarget(job) {
   const deadline = Date.now() + config.jobDeadlineSec * 1000;
   const remainingSec = () => Math.floor((deadline - Date.now()) / 1000);
 
-  const { inputPath: effectiveInputPath, info: prepInfo } = await prepareInput(job);
+  // The structural pass gets most of the budget but not all of it: it used
+  // to be able to consume the entire job deadline and leave nothing — not
+  // even a result of its own — which turned into a hard failure.
+  const { inputPath: effectiveInputPath, info: prepInfo } = await prepareInput(
+    job,
+    Math.floor(config.jobDeadlineSec * 0.7),
+  );
   // Recorded on the job immediately: if a later Ghostscript pass fails or
   // times out, the verdict still shows what preparation achieved, instead of
   // leaving it impossible to tell whether it even ran.
@@ -225,7 +236,7 @@ function runNext() {
 
   compressToTarget(job)
     .then(({ compressedSize, usedResolutionDpi, usedGrayscale, strippedRepeatedImages, strippedReferences,
-             dedupedReferences, losslessOnly, bestEffort }) => {
+             dedupedReferences, losslessOnly, bestEffort, structureChunksSkipped }) => {
       const verdict = computeVerdict({
         originalSize: job.originalSize,
         compressedSize,
@@ -248,6 +259,9 @@ function runNext() {
       }
       if (dedupedReferences !== undefined) {
         verdict.dedupedReferences = dedupedReferences;
+      }
+      if (structureChunksSkipped) {
+        verdict.structureChunksSkipped = structureChunksSkipped;
       }
       if (losslessOnly) {
         verdict.losslessOnly = true;

@@ -27,6 +27,7 @@ function toPublicJob(job) {
     strippedReferences: job.strippedReferences,
     dedupedReferences: job.dedupedReferences,
     structuredSize: job.structuredSize,
+    structureChunksSkipped: job.structureChunksSkipped,
     losslessOnly: job.losslessOnly,
     bestEffort: job.bestEffort,
     errorCode: job.errorCode,

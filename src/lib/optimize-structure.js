@@ -12,10 +12,16 @@ const SCRIPT_PATH = path.join(__dirname, 'optimize_structure.py');
 // sub-document) this is dramatically more effective than image compression —
 // measured 111 MB -> 2.5 MB losslessly, where Ghostscript at its most
 // aggressive settings plateaued at 10.5 MB with visibly degraded output.
-function optimizeStructure({ inputPath, outputPath, timeoutSec = config.structureTimeoutSec }) {
+function optimizeStructure({ inputPath, outputPath, timeoutSec = config.structureTimeoutSec, budgetSec }) {
   return new Promise((resolve, reject) => {
+    // The budget lets the script degrade gracefully (optimize the chunks it
+    // has time for, re-serialize the rest) instead of being killed with
+    // nothing to show for it, which used to fail the whole job.
+    const env = { ...process.env };
+    if (budgetSec) env.STRUCTURE_BUDGET_SEC = String(Math.floor(budgetSec));
     const proc = spawn(config.pythonBin, [SCRIPT_PATH, inputPath, outputPath], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
     let stdout = '';
     let stderr = '';

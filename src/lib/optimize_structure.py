@@ -33,8 +33,10 @@ Prints JSON to stdout: {"dedupedReferences": N, "sizeBefore": B, "sizeAfter": A,
 import os
 import sys
 import json
+import time
 import shutil
 import hashlib
+import multiprocessing
 import tempfile
 
 import pikepdf
@@ -44,61 +46,93 @@ import pikepdf
 MAX_FINGERPRINT_DEPTH = 20
 
 
-def fingerprint(obj, depth=0, seen=None):
+def fingerprint(obj, cache):
     """Canonical identity of an object, following indirect references.
 
     Two objects with equal fingerprints render identically, so either can
     replace the other. References are resolved rather than compared by object
     id, so e.g. two Form XObjects whose /Resources point at distinct but
     identical dictionaries still match.
+
+    `cache` memoizes per indirect object. Without it the same shared
+    sub-graphs (/Resources and everything under them) get re-walked once per
+    referencing object, which on a merged SAP document means hundreds of
+    thousands of redundant traversals.
     """
-    if seen is None:
-        seen = set()
+    digest, _unstable = _fingerprint(obj, 0, set(), cache)
+    return digest
+
+
+def _fingerprint(obj, depth, in_progress, cache):
+    """Returns (digest, unstable).
+
+    `unstable` marks a result that depended on where the traversal started —
+    a cycle or the depth cut-off — and therefore must not be memoized.
+    """
     if depth > MAX_FINGERPRINT_DEPTH:
-        return 'depth-limit'
+        return 'depth-limit', True
 
     objgen = getattr(obj, 'objgen', None)
-    if objgen and objgen != (0, 0):
-        if objgen in seen:
-            # Deliberately position-independent: including the object id here
+    indirect = bool(objgen and objgen != (0, 0))
+
+    if indirect:
+        cached = cache.get(objgen)
+        if cached is not None:
+            return cached, False
+        if objgen in in_progress:
+            # Position-independent on purpose: including the object id here
             # would give every copy of an identical structure a different
             # fingerprint as soon as it contains a back-reference, which
             # /Resources graphs routinely do.
-            return 'cycle'
-        seen = seen | {objgen}
+            return 'cycle', True
+        in_progress.add(objgen)
 
-    h = hashlib.sha256()
+    try:
+        h = hashlib.sha256()
+        unstable = False
 
-    if isinstance(obj, pikepdf.Stream):
-        h.update(b'stream:')
-        h.update(obj.read_raw_bytes())
-        for key in sorted(str(k) for k in obj.keys()):
-            if key == '/Length':
-                continue
-            h.update(key.encode())
-            h.update(fingerprint(obj[key], depth + 1, seen).encode())
-        return h.hexdigest()
+        if isinstance(obj, pikepdf.Stream):
+            h.update(b'stream:')
+            h.update(obj.read_raw_bytes())
+            for key in sorted(str(k) for k in obj.keys()):
+                if key == '/Length':
+                    continue
+                child, child_unstable = _fingerprint(obj[key], depth + 1, in_progress, cache)
+                unstable = unstable or child_unstable
+                h.update(key.encode())
+                h.update(child.encode())
+            digest = h.hexdigest()
+        elif isinstance(obj, pikepdf.Dictionary):
+            h.update(b'dict:')
+            for key in sorted(str(k) for k in obj.keys()):
+                child, child_unstable = _fingerprint(obj[key], depth + 1, in_progress, cache)
+                unstable = unstable or child_unstable
+                h.update(key.encode())
+                h.update(child.encode())
+            digest = h.hexdigest()
+        elif isinstance(obj, pikepdf.Array):
+            h.update(b'array:')
+            for item in obj:
+                child, child_unstable = _fingerprint(item, depth + 1, in_progress, cache)
+                unstable = unstable or child_unstable
+                h.update(child.encode())
+            digest = h.hexdigest()
+        else:
+            digest, unstable = 'scalar:' + repr(obj), False
 
-    if isinstance(obj, pikepdf.Dictionary):
-        h.update(b'dict:')
-        for key in sorted(str(k) for k in obj.keys()):
-            h.update(key.encode())
-            h.update(fingerprint(obj[key], depth + 1, seen).encode())
-        return h.hexdigest()
-
-    if isinstance(obj, pikepdf.Array):
-        h.update(b'array:')
-        for item in obj:
-            h.update(fingerprint(item, depth + 1, seen).encode())
-        return h.hexdigest()
-
-    return 'scalar:' + repr(obj)
+        if indirect and not unstable:
+            cache[objgen] = digest
+        return digest, unstable
+    finally:
+        if indirect:
+            in_progress.discard(objgen)
 
 
 def deduplicate(pdf):
     """Repoint every reference to a duplicated stream at one canonical copy."""
     canonical = {}
     replacement = {}
+    cache = {}
 
     # Single pass, keeping no list of stream wrappers: one Python wrapper per
     # stream is a real memory cost on documents with hundreds of thousands of
@@ -109,7 +143,7 @@ def deduplicate(pdf):
         objgen = getattr(obj, 'objgen', None)
         if not objgen or objgen == (0, 0):
             continue
-        fp = fingerprint(obj)
+        fp = fingerprint(obj, cache)
         keeper = canonical.get(fp)
         if keeper is None:
             canonical[fp] = obj
@@ -181,8 +215,33 @@ def optimize_whole(input_path, output_path):
     return rewired
 
 
-def optimize_chunked(input_path, output_path, pages_per_chunk):
-    """Same result as optimize_whole, with peak memory bounded by chunk size."""
+def optimize_fast(input_path, output_path):
+    """Re-serialize only: object streams + stream compression, no dedup.
+
+    Seconds rather than minutes, and still worth ~40% on generator output
+    that ships poorly compressed streams. Used as the degraded mode when
+    there is no budget left for the full pass.
+    """
+    pdf = pikepdf.open(input_path)
+    pdf.remove_unreferenced_resources()
+    pdf.save(
+        output_path,
+        object_stream_mode=pikepdf.ObjectStreamMode.generate,
+        compress_streams=True,
+        recompress_flate=True,
+    )
+    pdf.close()
+
+
+def optimize_chunked(input_path, output_path, pages_per_chunk, deadline=None):
+    """Same result as optimize_whole, with peak memory bounded by chunk size.
+
+    Degrades gracefully against `deadline`: chunks that there is no time left
+    to optimize are carried through untouched, so the result is always a
+    complete, valid document — just less optimized. Running out of time used
+    to mean producing nothing at all, which left the caller with a hard
+    failure after a quarter of an hour.
+    """
     with pikepdf.open(input_path) as probe:
         n_pages = len(probe.pages)
 
@@ -190,18 +249,48 @@ def optimize_chunked(input_path, output_path, pages_per_chunk):
     # them even if this process is killed.
     workdir = tempfile.mkdtemp(prefix='struct-', dir=os.path.dirname(os.path.abspath(output_path)))
     try:
-        optimized = []
-        total_rewired = 0
+        # The source is reopened per chunk on purpose. Holding one handle open
+        # across the whole split is ~30% faster but accumulates every touched
+        # object in that handle — 1.3 GB instead of 580 MB on an 81 MB test
+        # document — which defeats the point of chunking on large input.
+        chunk_paths = []
         for index, start in enumerate(range(0, n_pages, pages_per_chunk)):
             chunk_path = os.path.join(workdir, f'chunk-{index}.pdf')
             with pikepdf.open(input_path) as source, pikepdf.Pdf.new() as chunk:
                 chunk.pages.extend(source.pages[start:start + pages_per_chunk])
                 chunk.save(chunk_path)
+            chunk_paths.append(chunk_path)
 
-            opt_path = os.path.join(workdir, f'opt-{index}.pdf')
-            total_rewired += optimize_whole(chunk_path, opt_path)
-            os.remove(chunk_path)
-            optimized.append(opt_path)
+        # Chunks are independent, so they are optimized in parallel, in waves
+        # small enough to re-check the deadline between them. Each worker's
+        # memory is bounded by its own chunk.
+        workers = max(1, min(int(os.environ.get('STRUCTURE_WORKERS', '2')), len(chunk_paths)))
+        optimized = []
+        total_rewired = 0
+        skipped = 0
+
+        for wave_start in range(0, len(chunk_paths), workers):
+            wave = chunk_paths[wave_start:wave_start + workers]
+            if deadline is not None and time.time() >= deadline:
+                # Out of time for the full pass: still re-serialize, which is
+                # cheap and worth roughly 40%, rather than carrying the chunk
+                # through untouched.
+                for offset, chunk_path in enumerate(wave):
+                    fast_path = os.path.join(workdir, f'fast-{wave_start + offset}.pdf')
+                    optimize_fast(chunk_path, fast_path)
+                    os.remove(chunk_path)
+                    optimized.append(fast_path)
+                skipped += len(wave)
+                continue
+            targets = [os.path.join(workdir, f'opt-{wave_start + i}.pdf') for i in range(len(wave))]
+            if len(wave) > 1:
+                with multiprocessing.Pool(len(wave)) as pool:
+                    total_rewired += sum(pool.starmap(optimize_whole, list(zip(wave, targets))))
+            else:
+                total_rewired += optimize_whole(wave[0], targets[0])
+            for chunk_path in wave:
+                os.remove(chunk_path)
+            optimized.extend(targets)
 
         merged_path = os.path.join(workdir, 'merged.pdf')
         merged = pikepdf.Pdf.new()
@@ -211,14 +300,28 @@ def optimize_chunked(input_path, output_path, pages_per_chunk):
                 handle = pikepdf.open(chunk_file)
                 handles.append(handle)
                 merged.pages.extend(handle.pages)
-            merged.save(merged_path)
+            # Compressed on the way out: a plain save here would undo the
+            # per-chunk work, since the chunks' gains live in their
+            # serialization rather than in their content.
+            merged.save(
+                merged_path,
+                object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                compress_streams=True,
+            )
         finally:
             merged.close()
             for handle in handles:
                 handle.close()
 
-        total_rewired += optimize_whole(merged_path, output_path)
-        return total_rewired, len(optimized)
+        if deadline is not None and time.time() >= deadline:
+            # Chunks were already processed individually; re-processing the
+            # reassembled document costs a memory peak proportional to the
+            # whole file (3 GB measured), which is exactly what chunking
+            # exists to avoid.
+            shutil.move(merged_path, output_path)
+        else:
+            total_rewired += optimize_whole(merged_path, output_path)
+        return total_rewired, len(optimized), skipped
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -232,17 +335,21 @@ def main():
     pages_per_chunk = int(os.environ.get('STRUCTURE_CHUNK_PAGES', '250'))
     chunk_above = int(os.environ.get('STRUCTURE_CHUNK_ABOVE_BYTES', str(30 * 1024 * 1024)))
 
+    budget = float(os.environ.get('STRUCTURE_BUDGET_SEC', '0'))
+    deadline = (time.time() + budget) if budget > 0 else None
+
     size_before = os.path.getsize(input_path)
     if size_before > chunk_above:
-        rewired, chunks = optimize_chunked(input_path, output_path, pages_per_chunk)
+        rewired, chunks, skipped = optimize_chunked(input_path, output_path, pages_per_chunk, deadline)
     else:
-        rewired, chunks = optimize_whole(input_path, output_path), 1
+        rewired, chunks, skipped = optimize_whole(input_path, output_path), 1, 0
 
     print(json.dumps({
         "dedupedReferences": rewired,
         "sizeBefore": size_before,
         "sizeAfter": os.path.getsize(output_path),
         "chunks": chunks,
+        "chunksSkipped": skipped,
     }))
 
 
